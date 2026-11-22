@@ -1,0 +1,14 @@
+# RQ2b: does LoRA's advantage/disadvantage change when labelled data is scarce?
+# 2 methods x 5 sizes x 2 langs x 3 seeds = 60 runs (~1 h on a T4).
+# Small sizes get more epochs so every run sees a similar number of updates.
+experiment: size
+fixed:
+  model: google/muril-base-cased
+  lora_r: 8
+  lora_targets: attn_qv
+  epochs: 20
+grid:
+  method: [full, lora]
+  train_size: [50, 100, 200, 400, all]
+  train_lang: [pa, kn]
+  seed: [0, 1, 2]

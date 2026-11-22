@@ -1,0 +1,17 @@
+# RQ1 + RQ3: LoRA vs. full fine-tuning across encoders and languages.
+# Every run is tested on all 5 languages, so the same sweep also gives the
+# cross-lingual transfer matrix (train on row language, test on column).
+# 3 models x 2 methods x 5 train langs x 3 seeds = 90 runs (~2 h on a T4).
+experiment: main
+fixed:
+  epochs: 10
+  lora_r: 8
+  lora_targets: attn_qv
+grid:
+  model:
+    - google/muril-base-cased
+    - ai4bharat/IndicBERTv2-MLM-only
+    - FacebookAI/xlm-roberta-base
+  method: [full, lora]
+  train_lang: [pa, hi, kn, ur, en]
+  seed: [0, 1, 2]

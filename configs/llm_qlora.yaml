@@ -1,0 +1,17 @@
+# RQ4 (optional, needs a GPU): can a 2B decoder LLM adapted with QLoRA beat
+# the 237M Indic encoders? google/gemma-2-2b is gated: accept the licence on
+# its Hugging Face page and run `huggingface-cli login` first.
+# 1 model x 4 langs x 3 seeds = 12 runs (~1.5 h on a T4).
+experiment: llm
+fixed:
+  model: google/gemma-2-2b
+  method: qlora
+  lora_r: 16
+  lora_targets: attn_all
+  epochs: 5
+  batch_size: 8
+  grad_accum: 2
+  lr: 0.0002
+grid:
+  train_lang: [pa, hi, kn, ur]
+  seed: [0, 1, 2]

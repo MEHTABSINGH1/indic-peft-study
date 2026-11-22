@@ -1,0 +1,11 @@
+# Tiny end-to-end check that runs on a laptop CPU in about a minute.
+experiment: smoke
+fixed:
+  model: hf-internal-testing/tiny-random-BertForSequenceClassification
+  epochs: 1
+  train_size: 64
+  eval_langs: [pa, ur]
+grid:
+  method: [full, lora]
+  train_lang: [pa]
+  seed: [0, 1]

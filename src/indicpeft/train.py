@@ -1,0 +1,154 @@
+"""Train one configuration and evaluate it on every requested test language.
+
+Each run writes a single JSON file (metrics + raw predictions) so that
+results can be aggregated, bootstrapped and error-analysed later without
+re-training. Runs are idempotent: an existing JSON means "already done".
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import shutil
+import tempfile
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import numpy as np
+import torch
+from sklearn.metrics import accuracy_score, f1_score
+from transformers import (DataCollatorWithPadding, Trainer, TrainingArguments,
+                          set_seed)
+
+from . import data as D
+from .modeling import build, count_params
+
+
+@dataclass
+class RunConfig:
+    model: str = "google/muril-base-cased"
+    method: str = "lora"                 # full | lora | qlora
+    train_lang: str = "pa"
+    eval_langs: list[str] = field(default_factory=lambda: list(D.LANGS))
+    train_size: int | None = None        # None = all 701
+    seed: int = 0
+    lora_r: int = 8
+    lora_targets: str = "attn_qv"
+    epochs: int = 10
+    lr: float | None = None              # default depends on method
+    batch_size: int = 16
+    grad_accum: int = 1
+    max_len: int = 128
+    experiment: str = "main"
+
+    def resolved_lr(self) -> float:
+        if self.lr is not None:
+            return self.lr
+        return 3e-5 if self.method == "full" else 5e-4
+
+    def run_id(self) -> str:
+        m = self.model.split("/")[-1]
+        size = self.train_size or "all"
+        r = f"_r{self.lora_r}-{self.lora_targets}" if self.method != "full" else ""
+        return f"{self.experiment}__{m}__{self.method}{r}__{self.train_lang}__n{size}__s{self.seed}"
+
+
+def _metrics(pred) -> dict:
+    y_pred = np.argmax(pred.predictions, axis=-1)
+    return {"macro_f1": f1_score(pred.label_ids, y_pred, average="macro"),
+            "accuracy": accuracy_score(pred.label_ids, y_pred)}
+
+
+def run(cfg: RunConfig, out_dir: str | Path = "results/runs") -> dict:
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{cfg.run_id()}.json"
+    if out_file.exists():
+        print(f"[skip] {out_file.name} exists")
+        return json.loads(out_file.read_text(encoding="utf-8"))
+
+    set_seed(cfg.seed)
+    cuda = torch.cuda.is_available()
+    if cuda:
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+    model, tok = build(cfg.model, cfg.method, lora_r=cfg.lora_r, lora_targets=cfg.lora_targets)
+    params = count_params(model)
+
+    def encode(ds):
+        return ds.map(lambda b: tok(b["text"], truncation=True, max_length=cfg.max_len),
+                      batched=True, remove_columns=["index_id", "category", "text"])
+
+    train_ds = D.load_lang(cfg.train_lang)
+    train = encode(D.stratified_subsample(train_ds["train"], cfg.train_size, cfg.seed))
+    dev = encode(train_ds["validation"])
+
+    bf16 = cuda and torch.cuda.is_bf16_supported()
+    ckpt_dir = tempfile.mkdtemp(prefix="indicpeft_")
+    args = TrainingArguments(
+        output_dir=ckpt_dir, seed=cfg.seed, num_train_epochs=cfg.epochs,
+        # 10% linear warm-up, given as steps (works on transformers 4.x and 5.x)
+        learning_rate=cfg.resolved_lr(), weight_decay=0.01,
+        warmup_steps=max(1, int(0.1 * cfg.epochs * math.ceil(len(train) / (cfg.batch_size * cfg.grad_accum)))),
+        per_device_train_batch_size=cfg.batch_size, per_device_eval_batch_size=64,
+        gradient_accumulation_steps=cfg.grad_accum,
+        eval_strategy="epoch", save_strategy="epoch", save_total_limit=1,
+        load_best_model_at_end=True, metric_for_best_model="macro_f1",
+        bf16=bf16, fp16=cuda and not bf16 and cfg.method != "qlora",
+        gradient_checkpointing=cfg.method == "qlora",
+        report_to=[], logging_steps=20, disable_tqdm=True)
+    trainer = Trainer(model=model, args=args, train_dataset=train, eval_dataset=dev,
+                      data_collator=DataCollatorWithPadding(tok), compute_metrics=_metrics)
+
+    t0 = time.time()
+    trainer.train()
+    train_secs = time.time() - t0
+    peak_mem_gb = torch.cuda.max_memory_allocated() / 1e9 if cuda else None
+
+    results = {}
+    for lang in cfg.eval_langs:
+        test = encode(D.load_lang(lang)["test"])
+        out = trainer.predict(test)
+        y_pred = np.argmax(out.predictions, axis=-1)
+        results[lang] = {
+            "macro_f1": float(f1_score(out.label_ids, y_pred, average="macro")),
+            "accuracy": float(accuracy_score(out.label_ids, y_pred)),
+            "y_true": out.label_ids.tolist(), "y_pred": y_pred.tolist(),
+        }
+        print(f"  test[{lang}] macro-F1={results[lang]['macro_f1']:.4f}")
+
+    record = {
+        "run_id": cfg.run_id(), "config": asdict(cfg), "lr": cfg.resolved_lr(),
+        "trainable_params": params.trainable, "total_params": params.total,
+        "trainable_pct": params.pct, "peak_gpu_mem_gb": peak_mem_gb,
+        "train_seconds": train_secs, "n_train": len(train),
+        "gpu": torch.cuda.get_device_name(0) if cuda else "cpu",
+        "test": results,
+    }
+    out_file.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    shutil.rmtree(ckpt_dir, ignore_errors=True)
+    del trainer, model
+    if cuda:
+        torch.cuda.empty_cache()
+    return record
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    for f, default in asdict(RunConfig()).items():
+        if f == "eval_langs":
+            p.add_argument("--eval-langs", nargs="+", default=default)
+        elif f in {"train_size", "lr"}:
+            p.add_argument(f"--{f.replace('_', '-')}", type=int if f == "train_size" else float, default=None)
+        else:
+            p.add_argument(f"--{f.replace('_', '-')}", type=type(default), default=default)
+    p.add_argument("--out-dir", default="results/runs")
+    a = vars(p.parse_args())
+    out = a.pop("out_dir")
+    run(RunConfig(**a), out)
+
+
+if __name__ == "__main__":
+    main()

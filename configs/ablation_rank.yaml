@@ -1,0 +1,12 @@
+# RQ2a: how do LoRA rank and target modules trade parameters for accuracy?
+# 6 ranks x 3 target sets x 3 seeds = 54 runs on Punjabi (~1 h on a T4).
+experiment: rank
+fixed:
+  model: google/muril-base-cased
+  method: lora
+  train_lang: pa
+  epochs: 10
+grid:
+  lora_r: [1, 2, 4, 8, 16, 64]
+  lora_targets: [attn_qv, attn_all, all-linear]
+  seed: [0, 1, 2]

@@ -9,9 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from torch import nn
+from transformers import AutoModel, AutoTokenizer
+from transformers.modeling_outputs import SequenceClassifierOutput
 
-from .data import ID2LABEL, LABEL2ID
+from .data import LABELS
 
 # Attention projections per architecture family. "all-linear" is also accepted.
 TARGETS = {
@@ -60,17 +62,52 @@ def _resolve_targets(model, targets: str) -> list[str] | str:
         raise ValueError(f"No '{targets}' target list for model_type={family}") from e
 
 
+DECODERS = {"gemma", "gemma2", "gemma3", "llama", "qwen2", "mistral"}
+
+
+class PooledClassifier(nn.Module):
+    """Encoder + pooling + linear head.
+
+    We do NOT use the checkpoint's [CLS] pooler. For MuRIL its output is almost
+    identical for every sentence (mean pairwise cosine 0.999, per-dimension std
+    ~3e-4 on SIB-200 Punjabi), so a freshly initialised head cannot separate
+    classes and collapses to the majority class. Mean-pooling the token states
+    gives well-scaled, discriminative features (frozen linear probe: 0.78 vs.
+    0.74 macro-F1 with standardised pooler features). Decoder LLMs use the
+    last non-padding token instead, since only it has attended to the whole
+    sentence.
+    """
+
+    def __init__(self, encoder: nn.Module, num_labels: int, pooling: str, dropout: float = 0.1):
+        super().__init__()
+        self.encoder, self.pooling = encoder, pooling
+        self.config = encoder.config
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(encoder.config.hidden_size, num_labels)
+
+    def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, labels=None, **_):
+        extra = {} if token_type_ids is None else {"token_type_ids": token_type_ids}
+        h = self.encoder(input_ids=input_ids, attention_mask=attention_mask, **extra).last_hidden_state
+        if self.pooling == "mean":
+            m = attention_mask.unsqueeze(-1).to(h.dtype)
+            pooled = (h * m).sum(1) / m.sum(1).clamp(min=1)
+        else:  # last non-padding token (right padding)
+            last = attention_mask.sum(1) - 1
+            pooled = h[torch.arange(h.size(0), device=h.device), last]
+        logits = self.classifier(self.dropout(pooled.float()))
+        loss = nn.functional.cross_entropy(logits, labels) if labels is not None else None
+        return SequenceClassifierOutput(loss=loss, logits=logits)
+
+
 def build(model_name: str, method: str, lora_r: int = 8, lora_alpha: int | None = None,
           lora_dropout: float = 0.1, lora_targets: str = "attn_qv"):
     """Return (model, tokenizer) ready for training with the chosen method."""
     tok = AutoTokenizer.from_pretrained(model_name)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+    tok.padding_side = "right"
 
-    # ignore_mismatched_sizes: re-initialise any existing classification head
-    # (needed when a checkpoint ships with a head for a different label count).
-    kwargs = dict(num_labels=len(ID2LABEL), id2label=ID2LABEL, label2id=LABEL2ID,
-                  ignore_mismatched_sizes=True)
+    kwargs: dict = {}
     if method == "qlora":
         if not torch.cuda.is_available():
             raise RuntimeError("QLoRA needs a CUDA GPU (bitsandbytes 4-bit kernels).")
@@ -83,19 +120,18 @@ def build(model_name: str, method: str, lora_r: int = 8, lora_alpha: int | None 
         import transformers
         major, minor = (int(x) for x in transformers.__version__.split(".")[:2])
         kwargs["dtype" if (major, minor) >= (4, 56) else "torch_dtype"] = compute
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, **kwargs)
-    model.config.pad_token_id = tok.pad_token_id
-
-    if method == "full":
-        return model, tok
-    if method not in {"lora", "qlora"}:
+    if method not in {"full", "lora", "qlora"}:
         raise ValueError(f"Unknown method '{method}'")
+    encoder = AutoModel.from_pretrained(model_name, **kwargs)
+    pooling = "last" if encoder.config.model_type in DECODERS else "mean"
 
-    from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-    if method == "qlora":
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    cfg = LoraConfig(
-        task_type=TaskType.SEQ_CLS, r=lora_r, lora_alpha=lora_alpha or 2 * lora_r,
-        lora_dropout=lora_dropout, target_modules=_resolve_targets(model, lora_targets))
-    # TaskType.SEQ_CLS keeps the new classification head trainable.
-    return get_peft_model(model, cfg), tok
+    if method != "full":
+        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        if method == "qlora":
+            encoder = prepare_model_for_kbit_training(encoder, use_gradient_checkpointing=True)
+        cfg = LoraConfig(
+            task_type=TaskType.FEATURE_EXTRACTION, r=lora_r, lora_alpha=lora_alpha or 2 * lora_r,
+            lora_dropout=lora_dropout, target_modules=_resolve_targets(encoder, lora_targets))
+        encoder = get_peft_model(encoder, cfg)  # freezes the backbone, adds adapters
+    # The head sits outside the PEFT wrapper, so it is always fully trainable.
+    return PooledClassifier(encoder, len(LABELS), pooling), tok

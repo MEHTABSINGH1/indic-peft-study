@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 import tempfile
 import time
@@ -18,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score
-from transformers import (DataCollatorWithPadding, Trainer, TrainingArguments,
+from transformers import (DataCollatorWithPadding, Trainer, TrainerCallback, TrainingArguments,
                           set_seed)
 
 from . import data as D
@@ -54,6 +55,32 @@ class RunConfig:
         return f"{self.experiment}__{m}__{self.method}{r}__{self.train_lang}__n{size}__s{self.seed}"
 
 
+class BestEpoch(TrainerCallback):
+    """Remember the trainable weights of the epoch with the best dev macro-F1.
+
+    Only parameters that are being trained can change, so for LoRA this copies
+    a few MB; for full fine-tuning it is one CPU copy of the model.
+    """
+
+    def __init__(self, model: torch.nn.Module):
+        self.model, self.score, self.epoch, self.state = model, -1.0, None, None
+
+    def on_evaluate(self, args, state, control, metrics=None, **kw):
+        score = (metrics or {}).get("eval_macro_f1", -1.0)
+        if score > self.score:
+            self.score, self.epoch = score, round(state.epoch or 0)
+            self.state = {n: p.detach().to("cpu", copy=True)
+                          for n, p in self.model.named_parameters() if p.requires_grad}
+
+    def restore(self) -> None:
+        if self.state is None:
+            return
+        params = dict(self.model.named_parameters())
+        with torch.no_grad():
+            for n, saved in self.state.items():
+                params[n].copy_(saved.to(params[n].device))
+
+
 def _metrics(pred) -> dict:
     y_pred = np.argmax(pred.predictions, axis=-1)
     return {"macro_f1": f1_score(pred.label_ids, y_pred, average="macro"),
@@ -68,6 +95,7 @@ def run(cfg: RunConfig, out_dir: str | Path = "results/runs") -> dict:
         print(f"[skip] {out_file.name} exists")
         return json.loads(out_file.read_text(encoding="utf-8"))
 
+    t_start = time.time()
     set_seed(cfg.seed)
     cuda = torch.cuda.is_available()
     if cuda:
@@ -85,7 +113,9 @@ def run(cfg: RunConfig, out_dir: str | Path = "results/runs") -> dict:
     train = encode(D.stratified_subsample(train_ds["train"], cfg.train_size, cfg.seed))
     dev = encode(train_ds["validation"])
 
-    bf16 = cuda and torch.cuda.is_bf16_supported()
+    # INDICPEFT_FP32=1 disables mixed precision (GTX 16xx cards give NaN losses in fp16)
+    force_fp32 = os.environ.get("INDICPEFT_FP32", "") == "1"
+    bf16 = cuda and not force_fp32 and torch.cuda.is_bf16_supported()
     ckpt_dir = tempfile.mkdtemp(prefix="indicpeft_")
     args = TrainingArguments(
         output_dir=ckpt_dir, seed=cfg.seed, num_train_epochs=cfg.epochs,
@@ -94,17 +124,23 @@ def run(cfg: RunConfig, out_dir: str | Path = "results/runs") -> dict:
         warmup_steps=max(1, int(0.1 * cfg.epochs * math.ceil(len(train) / (cfg.batch_size * cfg.grad_accum)))),
         per_device_train_batch_size=cfg.batch_size, per_device_eval_batch_size=64,
         gradient_accumulation_steps=cfg.grad_accum,
-        eval_strategy="epoch", save_strategy="epoch", save_total_limit=1,
-        load_best_model_at_end=True, metric_for_best_model="macro_f1",
-        bf16=bf16, fp16=cuda and not bf16 and cfg.method != "qlora",
-        gradient_checkpointing=cfg.method == "qlora",
+        # Best epoch is kept in memory by BestEpoch (no checkpoint files): much
+        # faster than writing ~1 GB per epoch, and works for the custom head.
+        eval_strategy="epoch", save_strategy="no",
+        bf16=bf16, fp16=cuda and not force_fp32 and not bf16 and cfg.method != "qlora",
+        # QLoRA: gradient checkpointing is already enabled on the encoder by
+        # prepare_model_for_kbit_training (the wrapper has no such method).
         report_to=[], logging_steps=20, disable_tqdm=True)
+    best = BestEpoch(model)
     trainer = Trainer(model=model, args=args, train_dataset=train, eval_dataset=dev,
-                      data_collator=DataCollatorWithPadding(tok), compute_metrics=_metrics)
+                      data_collator=DataCollatorWithPadding(tok), compute_metrics=_metrics,
+                      callbacks=[best])
 
     t0 = time.time()
     trainer.train()
     train_secs = time.time() - t0
+    best.restore()
+    print(f"  best epoch {best.epoch} (dev macro-F1={best.score:.4f})")
     peak_mem_gb = torch.cuda.max_memory_allocated() / 1e9 if cuda else None
 
     results = {}
@@ -124,6 +160,8 @@ def run(cfg: RunConfig, out_dir: str | Path = "results/runs") -> dict:
         "trainable_params": params.trainable, "total_params": params.total,
         "trainable_pct": params.pct, "peak_gpu_mem_gb": peak_mem_gb,
         "train_seconds": train_secs, "n_train": len(train),
+        "best_epoch": best.epoch, "best_dev_macro_f1": best.score,
+        "total_seconds": time.time() - t_start,
         "gpu": torch.cuda.get_device_name(0) if cuda else "cpu",
         "test": results,
     }

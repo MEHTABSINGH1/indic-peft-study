@@ -37,6 +37,8 @@ Most Indian languages have only a few hundred labelled examples for any given ta
 
 **Methods:** full fine-tuning, LoRA (r = 8 on query/value by default) and QLoRA (4-bit NF4 with double quantization).
 
+**Classification head:** mean-pooled token states → dropout → linear layer, for every model and method (decoders use the last token). We do not use the checkpoint's `[CLS]` pooler: for MuRIL its output is almost identical for every sentence (mean pairwise cosine 0.999), so a freshly initialised head collapsed to the majority class (macro-F1 0.057). With a frozen encoder, a linear probe on mean-pooled features reaches 0.78 macro-F1 on Punjabi, compared with 0.74 on standardised pooler features.
+
 **Protocol:**
 - 10 epochs, with the best checkpoint chosen on dev macro-F1.
 - Learning rate 3e-5 for full fine-tuning and 5e-4 for LoRA, with 10% warm-up.

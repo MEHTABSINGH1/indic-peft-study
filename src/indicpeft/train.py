@@ -46,7 +46,8 @@ class RunConfig:
     def resolved_lr(self) -> float:
         if self.lr is not None:
             return self.lr
-        return 3e-5 if self.method == "full" else 5e-4
+        # chosen on the Punjabi dev set (see README, section 3.1)
+        return 5e-5 if self.method == "full" else 2e-3
 
     def run_id(self) -> str:
         m = self.model.split("/")[-1]

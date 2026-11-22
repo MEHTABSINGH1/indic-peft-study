@@ -41,11 +41,28 @@ Most Indian languages have only a few hundred labelled examples for any given ta
 
 **Protocol:**
 - 10 epochs, with the best checkpoint chosen on dev macro-F1.
-- Learning rate 3e-5 for full fine-tuning and 5e-4 for LoRA, with 10% warm-up.
+- Learning rate 5e-5 for full fine-tuning and 2e-3 for LoRA, with 10% warm-up. Both rates were chosen on the Punjabi **dev** set (seed 0, 10 epochs) from LoRA {5e-4, 1e-3, 2e-3, 3e-3} and full {2e-5, 3e-5, 5e-5, 1e-4}; see section 3.1.
 - Max length 128 and batch size 16.
 - **3 seeds** per configuration; results are reported as mean ± std.
 - Significance of LoRA − full is tested with a **paired bootstrap** over test sentences (2,000 resamples, seeds pooled).
 - Peak GPU memory is measured with `torch.cuda.max_memory_allocated`.
+
+### 3.1 Learning-rate selection
+
+MuRIL-base, Punjabi, seed 0, 10 epochs. Selection used the dev set only (99 sentences); test scores were not used. Rule: highest dev macro-F1, and if two rates are within 0.01, take the smaller one. Raw runs are in [`results/lrsearch/`](results/lrsearch/).
+
+| Method | LR | Best dev macro-F1 | Best epoch |
+|---|---|---|---|
+| LoRA | 5e-4 | 0.7133 | 10 |
+| LoRA | 1e-3 | 0.8061 | 7 |
+| LoRA | **2e-3** | **0.8350** | 5 |
+| LoRA | 3e-3 | 0.8326 | 7 |
+| Full | 2e-5 | 0.8237 | 4 |
+| Full | 3e-5 | 0.8503 | 9 |
+| Full | **5e-5** | **0.8629** | 9 |
+| Full | 1e-4 | 0.8308 | 10 |
+
+For LoRA, 3e-3 is within 0.01 of 2e-3, so the smaller rate (2e-3) was chosen. This is a single-seed search on a small dev set, so differences of about 0.01 are within noise.
 
 ## 4. Results
 

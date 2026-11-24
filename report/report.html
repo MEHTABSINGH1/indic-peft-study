@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How Much Does LoRA Lose? – Mehtab Singh</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 16mm 15mm; }
+  body { font-family: Cambria, "Times New Roman", serif; font-size: 10.2pt; line-height: 1.38; color: #111; margin: 0; }
+  h1 { font-size: 16.5pt; text-align: center; margin: 0 0 4px; line-height: 1.2; }
+  .authors { text-align: center; font-size: 10pt; margin-bottom: 2px; }
+  .affil { text-align: center; font-size: 9pt; color: #444; margin-bottom: 10px; }
+  .abstract { margin: 0 24px 10px; font-size: 9.6pt; text-align: justify; }
+  .abstract b:first-child { display: block; text-align: center; margin-bottom: 2px; }
+  h2 { font-size: 11.5pt; margin: 12px 0 4px; border-bottom: 1px solid #999; padding-bottom: 1px; }
+  h3 { font-size: 10.4pt; margin: 8px 0 2px; }
+  p { margin: 4px 0; text-align: justify; }
+  table { page-break-inside: avoid; border-collapse: collapse; margin: 6px auto; font-size: 8.8pt; }
+  th, td { padding: 2px 6px; text-align: center; border-bottom: 1px solid #ddd; }
+  thead th { border-top: 1.5px solid #222; border-bottom: 1px solid #222; }
+  tbody tr:last-child td { border-bottom: 1.5px solid #222; }
+  td:first-child, th:first-child { text-align: left; }
+  .cap { font-size: 8.8pt; color: #333; text-align: center; margin: 2px 8px 8px; }
+  figure { margin: 6px 0; text-align: center; page-break-inside: avoid; }
+  figure img { max-width: 100%; }
+  .two { display: flex; gap: 8px; align-items: flex-start; }
+  .two figure { flex: 1; }
+  ul { margin: 3px 0 3px 18px; padding: 0; } li { margin: 1px 0; }
+  code { font-size: 8.8pt; }
+  .refs { font-size: 8.8pt; } .refs li { margin-bottom: 2px; }
+  a { color: #0b3d91; text-decoration: none; }
+  .pb { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>How Much Does LoRA Lose? Parameter-Efficient Adaptation of Multilingual Encoders for Low-Resource Indic Languages</h1>
+<div class="authors">Mehtab Singh</div>
+<div class="affil">M.Tech Data Science &amp; AI, IIIT Dharwad · Code and all 204 run logs: <a href="https://github.com/MEHTABSINGH1/indic-peft-study">github.com/MEHTABSINGH1/indic-peft-study</a></div>
+
+<div class="abstract"><b>Abstract</b>
+Parameter-efficient fine-tuning (PEFT) is the default way to adapt large models cheaply, but its cost in accuracy is rarely measured for low-resource Indian languages. We compare LoRA with full fine-tuning for topic classification in Punjabi, Hindi, Kannada and Urdu on the sentence-parallel SIB-200 benchmark, using three multilingual encoders (MuRIL, IndicBERT-v2, XLM-R), learning rates tuned on the dev set, three seeds, and paired-bootstrap significance tests (204 training runs). With the best encoder, LoRA trains 0.11% of the parameters with 2.0× less GPU memory and is 0.5 macro-F1 points below full fine-tuning on average; no per-language difference is significant (p ≥ 0.37). The picture changes with very little data: at 50 labelled examples LoRA is 10.3 points worse, and the gap disappears from 200 examples. Zero-shot transfer into Punjabi is nearly lossless whatever the source language (85.8 from Hindi or English vs. 86.2 in-language), and switching script from Devanagari to Perso-Arabic (Hindi → Urdu) costs only 1.5 points. We also report two practical failure modes: a majority-class collapse caused by a near-constant [CLS] pooler, and LoRA divergence at higher ranks under a fixed learning rate.
+</div>
+
+<h2>1. Introduction</h2>
+<p>Most Indian languages have only a few hundred labelled examples for a given task. Full fine-tuning of a 237M-parameter encoder is expensive at that scale and can overfit, while LoRA <a href="#r2">[2]</a> trains a small low-rank update and leaves the backbone frozen. Evidence that LoRA is "almost as good" comes mostly from English and high-resource benchmarks. We ask three questions:</p>
+<ul>
+  <li><b>RQ1.</b> How close does LoRA get to full fine-tuning for Indic languages, and does this depend on the encoder?</li>
+  <li><b>RQ2.</b> How do LoRA rank, target modules and the amount of labelled data change the gap?</li>
+  <li><b>RQ3.</b> Which source language transfers best zero-shot to Punjabi, and what does a change of script alone cost?</li>
+</ul>
+<p>Because SIB-200 <a href="#r1">[1]</a> contains <i>the same sentences</i> in every language, differences between languages in our results come from language and script, not from different data.</p>
+
+<h2>2. Experimental setup</h2>
+<p><b>Data.</b> SIB-200 topic classification (7 classes; 701 / 99 / 204 train / dev / test sentences per language) for Punjabi (Gurmukhi), Hindi (Devanagari), Kannada (Kannada script) and Urdu (Perso-Arabic); English is used as an additional transfer source.</p>
+<p><b>Models and methods.</b> MuRIL-base <a href="#r4">[4]</a>, IndicBERT-v2 <a href="#r5">[5]</a> and XLM-R-base <a href="#r6">[6]</a>, each trained with full fine-tuning or LoRA (r = 8 on the query and value projections, α = 16). Every run is evaluated on the test sets of all five languages, which gives the cross-lingual transfer matrix at no extra cost.</p>
+<p><b>Classification head.</b> Mean-pooled token states → dropout → linear layer. We do not use the checkpoint's [CLS] pooler (Section 4).</p>
+<p><b>Protocol.</b> 10 epochs, best epoch chosen on dev macro-F1, batch size 16, max length 128, 10% warm-up, fp16. Learning rates were selected on the Punjabi dev set only (MuRIL, seed 0): LoRA from {5e-4, 1e-3, 2e-3, 3e-3} → <b>2e-3</b> (dev 0.835), full from {2e-5, 3e-5, 5e-5, 1e-4} → <b>5e-5</b> (dev 0.863). The default 5e-4 for LoRA reached only 0.713 on dev, so without this step LoRA would have looked 14 points worse than it is. Each configuration is run with 3 seeds; LoRA − full differences are tested with a paired bootstrap over test sentences (2,000 resamples, seeds pooled). All runs used one NVIDIA GTX 1660 Ti (6 GB).</p>
+
+<h2>3. Results</h2>
+<h3>3.1 RQ1: LoRA vs. full fine-tuning</h3>
+<table>
+<thead><tr><th>Model</th><th>Method</th><th>Punjabi</th><th>Hindi</th><th>Kannada</th><th>Urdu</th><th>Avg*</th><th>Trainable %</th><th>Peak mem (GB)</th></tr></thead>
+<tbody>
+<tr><td>IndicBERT-v2</td><td>full</td><td>86.2 ± 1.3</td><td>86.8 ± 0.1</td><td>88.6 ± 3.9</td><td>86.1 ± 0.5</td><td>87.7 ± 0.7</td><td>100</td><td>4.50</td></tr>
+<tr><td>IndicBERT-v2</td><td>LoRA</td><td>85.1 ± 2.8</td><td>87.7 ± 0.3</td><td>87.7 ± 1.8</td><td>85.3 ± 1.6</td><td>87.3 ± 0.6</td><td>0.11</td><td>2.25</td></tr>
+<tr><td>MuRIL</td><td>full</td><td>84.8 ± 1.9</td><td>85.8 ± 2.4</td><td>87.8 ± 2.9</td><td>85.7 ± 3.3</td><td>86.4 ± 0.4</td><td>100</td><td>3.91</td></tr>
+<tr><td>MuRIL</td><td>LoRA</td><td>84.9 ± 1.2</td><td>87.7 ± 1.7</td><td>78.4 ± 14.3</td><td>87.5 ± 0.5</td><td>85.7 ± 2.7</td><td>0.13</td><td>1.92</td></tr>
+<tr><td>XLM-R</td><td>full</td><td>76.2 ± 1.4</td><td>83.6 ± 2.1</td><td>82.6 ± 1.0</td><td>81.6 ± 1.1</td><td>82.9 ± 1.0</td><td>100</td><td>4.67</td></tr>
+<tr><td>XLM-R</td><td>LoRA</td><td>80.0 ± 2.1</td><td>82.7 ± 2.5</td><td>79.7 ± 3.4</td><td>76.2 ± 14.3</td><td>81.6 ± 2.6</td><td>0.11</td><td>2.19</td></tr>
+</tbody></table>
+<div class="cap"><b>Table 1.</b> In-language test macro-F1 (mean ± std over 3 seeds). *Average over the four Indic languages and English.</div>
+
+<p>For the best encoder, IndicBERT-v2, LoRA is 0.5 points below full fine-tuning averaged over the four Indic languages. Per-language differences range from −1.1 to +0.8 points, and none is significant (all p ≥ 0.37). LoRA halves peak GPU memory (2.25 vs. 4.51 GB). Indic-specific encoders beat XLM-R on average by 3.5–4.8 points with full fine-tuning and 4.1–5.7 points with LoRA.</p>
+<p>Two cells show a significant LoRA deficit: MuRIL on Kannada (−9.5, p = 0.001) and XLM-R on Urdu (−5.4, p = 0.001). In both, the ±14.3 standard deviation comes from a single seed that trained poorly, not from a consistent gap. The learning rate tuned on MuRIL/Punjabi therefore does not transfer safely to every model–language–seed combination; full fine-tuning showed no such failures.</p>
+
+<figure><img src="../results/figures/lora_vs_full.png" alt="LoRA vs full">
+<div class="cap"><b>Figure 1.</b> Test macro-F1 of full fine-tuning and LoRA per encoder and language (error bars: std over 3 seeds).</div></figure>
+
+<h3>3.2 RQ2: data size and LoRA rank</h3>
+<div class="two">
+<figure><img src="../results/figures/data_size.png" alt="data size">
+<div class="cap"><b>Figure 2.</b> MuRIL, macro-F1 vs. number of labelled training examples (log scale).</div></figure>
+<figure><img src="../results/figures/rank_ablation.png" alt="rank ablation">
+<div class="cap"><b>Figure 3.</b> MuRIL/Punjabi, macro-F1 vs. trainable LoRA parameters for three target-module sets.</div></figure>
+</div>
+<p><b>LoRA does not help when data is scarce.</b> With 50 examples LoRA is 10.3 points below full fine-tuning (average of Punjabi and Kannada), and it is still well below at 100. From 200 examples the two are within noise, with LoRA slightly ahead at 200 (Punjabi 80.6 vs. 78.8; Kannada 79.7 vs. 79.3). This contradicts the common expectation that PEFT is the safer choice in the very-low-data regime, at least with a single fixed learning rate.</p>
+<p><b>Rank.</b> Up to rank 8, macro-F1 is flat within noise for all target sets (e.g. query/value: 85.7 at r = 1, 84.9 at r = 8); rank 1 on all linear layers (0.07% of parameters) is as good as anything we tried. From rank 16, many runs diverged to chance level (query/value at r = 64: 5.9). Because α = 2r keeps the LoRA scale constant while the update grows with rank, a learning rate tuned at r = 8 is too large at high rank. This is a learning-rate × rank interaction, not evidence about adapter capacity; a per-rank learning-rate search is needed to isolate the effect of rank.</p>
+
+<h3>3.3 RQ3: cross-lingual transfer and script</h3>
+<div class="two">
+<figure style="flex:0.9"><img src="../results/figures/transfer_IndicBERT-v2_full.png" alt="transfer">
+<div class="cap"><b>Figure 4.</b> IndicBERT-v2, full fine-tuning: train language (rows) vs. test language (columns).</div></figure>
+<div style="flex:1.1">
+<p>Transfer is nearly flat. A model trained only on Hindi reaches 85.8 on Punjabi, the same as one trained only on English (85.8) and close to training on Punjabi itself (86.2). We expected a related Indic source language to beat English; it did not (difference 0.05 points).</p>
+<p>Hindi and Urdu are close to one spoken language written in two scripts. Training on Hindi and testing on Urdu gives 85.3 against 86.8 on Hindi, so the script change alone costs <b>1.5 points</b>: real but small for a shared multilingual encoder.</p>
+<p><b>Error analysis.</b> For MuRIL trained on Hindi, <i>entertainment</i> is the weakest class in every test language (F1 75 / 65 / 70 for Hindi / Punjabi / Urdu). Transfer errors (94 for Punjabi and 91 for Urdu, pooled over 3 seeds) are mostly confusions among entertainment, travel and science/technology.</p>
+</div></div>
+
+<h2>4. A failure mode worth knowing: [CLS]-pooler collapse</h2>
+<p>Our first implementation used the standard Hugging Face sequence-classification head, which reads the checkpoint's [CLS] pooler. MuRIL+LoRA then predicted a single class for every input (macro-F1 0.057, the majority-class score), in fp16 and fp32 alike, although the loss decreased. Diagnosis showed that MuRIL's pooler output is almost identical for all sentences (mean pairwise cosine 0.999; per-dimension std ≈ 3·10<sup>-4</sup>), so a freshly initialised head can only learn the class prior. The information is present but badly scaled: a frozen-encoder linear probe reaches 0.74 macro-F1 on standardised pooler features and 0.78 on mean-pooled token states. Switching to mean pooling fixed training for all models. The general lesson is to check that features vary across inputs before blaming precision or optimisation.</p>
+
+<h2>5. Limitations</h2>
+<ul>
+  <li>SIB-200 sentences are short and formal (FLORES). The results may not hold for code-mixed or social-media text, or for harder tasks than topic classification.</li>
+  <li>With 204 test sentences per language, differences under about 2 points are often not significant.</li>
+  <li>Learning rates were tuned once (MuRIL, Punjabi, one seed) and reused everywhere, which explains the diverged high-rank runs and the two unstable LoRA seeds.</li>
+  <li>A Gemma-2-2B + QLoRA <a href="#r3">[3]</a> comparison is implemented but was not run, because it needs more than 6 GB of GPU memory.</li>
+</ul>
+
+<h2>References</h2>
+<ol class="refs">
+  <li id="r1">D. Adelani et al. SIB-200: A Simple, Inclusive, and Big Evaluation Dataset for Topic Classification in 200+ Languages and Dialects. EACL 2024.</li>
+  <li id="r2">E. Hu et al. LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022.</li>
+  <li id="r3">T. Dettmers et al. QLoRA: Efficient Finetuning of Quantized LLMs. NeurIPS 2023.</li>
+  <li id="r4">S. Khanuja et al. MuRIL: Multilingual Representations for Indian Languages. arXiv 2021.</li>
+  <li id="r5">S. Doddapaneni et al. Towards Leaving No Indic Language Behind: Building Monolingual Corpora, Benchmark and Models for Indic Languages. ACL 2023.</li>
+  <li id="r6">A. Conneau et al. Unsupervised Cross-lingual Representation Learning at Scale. ACL 2020.</li>
+</ol>
+</body>
+</html>

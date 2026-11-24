@@ -19,7 +19,7 @@ Most Indian languages have only a few hundred labelled examples for any given ta
 | **RQ1** | How close does LoRA get to full fine-tuning on Indic languages, and does the gap differ between Indic-specific (MuRIL, IndicBERT-v2) and general multilingual (XLM-R) encoders? | `configs/main.yaml` |
 | **RQ2** | How do LoRA rank, target modules and the amount of labelled data affect the gap? | `configs/ablation_rank.yaml`, `configs/ablation_size.yaml` |
 | **RQ3** | Which source language transfers best zero-shot to Punjabi, and how much does a script change alone cost (Hindi → Urdu)? | transfer matrix from `main.yaml` |
-| **RQ4** *(optional)* | Does a 2B decoder LLM (Gemma-2-2B) with 4-bit QLoRA beat 237M-parameter Indic encoders? | `configs/llm_qlora.yaml` |
+| **RQ4** *(not run)* | Does a 2B decoder LLM (Gemma-2-2B) with 4-bit QLoRA beat 237M-parameter Indic encoders? Config included; needs more than 6 GB of GPU memory. | `configs/llm_qlora.yaml` |
 
 ## 3. Setup
 
@@ -33,7 +33,7 @@ Most Indian languages have only a few hundred labelled examples for any given ta
 | `ur` | Urdu | Perso-Arabic |
 | `en` | English | Latin (transfer source only) |
 
-**Models:** MuRIL-base, IndicBERT-v2 (MLM-only), XLM-RoBERTa-base and, optionally, Gemma-2-2B.
+**Models:** MuRIL-base, IndicBERT-v2 (MLM-only) and XLM-RoBERTa-base. A Gemma-2-2B + QLoRA config (`configs/llm_qlora.yaml`) is included but was not run, because it needs more than the 6 GB of GPU memory available.
 
 **Methods:** full fine-tuning, LoRA (r = 8 on query/value by default) and QLoRA (4-bit NF4 with double quantization).
 
@@ -66,15 +66,30 @@ For LoRA, 3e-3 is within 0.01 of 2e-3, so the smaller rate (2e-3) was chosen. Th
 
 ## 4. Results
 
-All tables are generated in [`results/RESULTS.md`](results/RESULTS.md).
+Full tables: [`results/RESULTS.md`](results/RESULTS.md) · raw runs (one JSON per run, with predictions): [`results/runs/`](results/runs/) · a short write-up: [`report/indic_peft_report.pdf`](report/indic_peft_report.pdf).
 
-- **Table 1:** in-language macro-F1, trainable %, memory and time
-- **Table 2:** LoRA − full, with 95% CI and p-value
-- **Table 3 / figures:** cross-lingual transfer matrices (`results/figures/transfer_*.png`)
-- **Table 4 / figure:** rank × target-module ablation (`results/figures/rank_ablation.png`)
-- **Table 5 / figure:** data-size curve (`results/figures/data_size.png`)
-- **Table 6:** Gemma-2-2B + QLoRA
-- **Error analysis:** per-class F1, confusion matrices and parallel sentences that are right in Hindi but wrong in Urdu or Punjabi (`results/error_analysis/`)
+### In-language macro-F1 (test, mean ± std over 3 seeds)
+
+| Model | Method | Punjabi | Hindi | Kannada | Urdu | Avg (4 Indic + En) | Trainable % | Peak GPU mem (GB) |
+|---|---|---|---|---|---|---|---|---|
+| IndicBERT-v2 | full | 86.2 ± 1.3 | 86.8 ± 0.1 | 88.6 ± 3.9 | 86.1 ± 0.5 | 87.7 ± 0.7 | 100 | 4.50 |
+| IndicBERT-v2 | LoRA | 85.1 ± 2.8 | 87.7 ± 0.3 | 87.7 ± 1.8 | 85.3 ± 1.6 | 87.3 ± 0.6 | 0.11 | 2.25 |
+| MuRIL | full | 84.8 ± 1.9 | 85.8 ± 2.4 | 87.8 ± 2.9 | 85.7 ± 3.3 | 86.4 ± 0.4 | 100 | 3.91 |
+| MuRIL | LoRA | 84.9 ± 1.2 | 87.7 ± 1.7 | 78.4 ± 14.3 | 87.5 ± 0.5 | 85.7 ± 2.7 | 0.13 | 1.92 |
+| XLM-R | full | 76.2 ± 1.4 | 83.6 ± 2.1 | 82.6 ± 1.0 | 81.6 ± 1.1 | 82.9 ± 1.0 | 100 | 4.67 |
+| XLM-R | LoRA | 80.0 ± 2.1 | 82.7 ± 2.5 | 79.7 ± 3.4 | 76.2 ± 14.3 | 81.6 ± 2.6 | 0.11 | 2.19 |
+
+LoRA − full differences with 95% bootstrap CIs and p-values are in Table 2 of [`results/RESULTS.md`](results/RESULTS.md). For IndicBERT-v2 none is significant (p ≥ 0.37).
+
+![LoRA vs full fine-tuning](results/figures/lora_vs_full.png)
+
+| Data efficiency (MuRIL) | Zero-shot transfer (IndicBERT-v2, full) |
+|---|---|
+| ![data size](results/figures/data_size.png) | ![transfer](results/figures/transfer_IndicBERT-v2_full.png) |
+
+![rank ablation](results/figures/rank_ablation.png)
+
+**Error analysis** ([`results/error_analysis/`](results/error_analysis/)): per-class F1, confusion matrices, and parallel sentences that MuRIL (trained on Hindi) gets right in Hindi but wrong in Punjabi or Urdu. *Entertainment* is the weakest class in every language (F1 65–75), and transfer errors (Hindi → Punjabi: 94, Hindi → Urdu: 91, pooled over 3 seeds) are mostly confusions among entertainment, travel and science/technology.
 
 ### Key findings
 

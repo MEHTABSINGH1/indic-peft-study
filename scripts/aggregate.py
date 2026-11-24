@@ -138,6 +138,23 @@ def section_main(df, raw, out_md, figs, summary):
         fig.savefig(figs / f"transfer_{model}_{method}.png", dpi=160)
         plt.close(fig)
 
+    # Figure: LoRA vs. full per model and language (in-language, mean ± std over seeds)
+    models = list(inl.model.unique())
+    fig, axes = plt.subplots(1, len(models), figsize=(3.6 * len(models), 3.4), sharey=True)
+    for ax, model in zip(np.atleast_1d(axes), models):
+        x = np.arange(len(langs))
+        for k, (method, color) in enumerate([("full", "#4c72b0"), ("lora", "#dd8452")]):
+            g = inl[(inl.model == model) & (inl.method == method)]
+            mu = [g[g.test_lang == l].macro_f1.mean() for l in langs]
+            sd = [g[g.test_lang == l].macro_f1.std() for l in langs]
+            ax.bar(x + (k - 0.5) * 0.38, mu, 0.38, yerr=sd, capsize=2, color=color,
+                   label="full fine-tuning" if method == "full" else "LoRA (r=8)")
+        ax.set_xticks(x, [LANG_NAME[l] for l in langs], rotation=30)
+        ax.set_title(model); ax.set_ylim(50, 100); ax.grid(axis="y", alpha=.3)
+    np.atleast_1d(axes)[0].set_ylabel("test macro-F1")
+    np.atleast_1d(axes)[0].legend(fontsize=8, loc="lower left")
+    fig.tight_layout(); fig.savefig(figs / "lora_vs_full.png", dpi=160); plt.close(fig)
+
     # Headline numbers (best Indic encoder = highest avg in-language full FT)
     full = inl[inl.method == "full"].groupby("model").macro_f1.mean()
     best = full.idxmax()
@@ -204,6 +221,7 @@ def section_size(df, out_md, figs, summary):
         ax.errorbar(agg.index, agg["mean"], yerr=agg["std"], marker="o", capsize=3,
                     ls="-" if method == "lora" else "--", label=f"{LANG_NAME[lang]} / {method}")
     ax.set_xscale("log"); ax.set_xlabel("labelled training examples"); ax.set_ylabel("macro-F1")
+    ax.set_xticks(sizes, [str(n) for n in sizes]); ax.minorticks_off(); ax.grid(alpha=.3)
     ax.set_title("Data efficiency: LoRA vs. full fine-tuning"); ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(figs / "data_size.png", dpi=160); plt.close(fig)
     small = s[s.train_size == sizes[0]].groupby("method").macro_f1.mean()

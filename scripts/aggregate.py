@@ -87,7 +87,7 @@ def section_main(df, raw, out_md, figs, summary):
 
     out_md.append("## Table 1 — In-language macro-F1 (mean ± std over seeds)\n")
     hdr = "| Model | Method | " + " | ".join(LANG_NAME[l] for l in langs) + \
-          " | Avg | Trainable % | Peak GPU mem (GB) | Train time (s) |"
+          " | Avg | Trainable % | Peak GPU mem (GB) | Train time (s, median) |"
     out_md += [hdr, "|" + "---|" * (len(langs) + 6)]
     for (model, method), g in inl.groupby(["model", "method"], sort=False):
         cells = [pm(g[g.test_lang == l].macro_f1) for l in langs]
@@ -95,7 +95,7 @@ def section_main(df, raw, out_md, figs, summary):
         mem = g.peak_mem_gb.dropna()
         mem_s = f"{mem.mean():.2f}" if not mem.empty else "–"
         out_md.append(f"| {model} | {method} | " + " | ".join(cells) +
-                      f" | {pm(avg)} | {g.trainable_pct.iloc[0]:.2f} | {mem_s} | {g.train_s.mean():.0f} |")
+                      f" | {pm(avg)} | {g.trainable_pct.iloc[0]:.2f} | {mem_s} | {g.train_s.median():.0f} |")
 
     # LoRA - full with paired bootstrap significance
     out_md.append("\n## Table 2 — LoRA minus full fine-tuning (macro-F1 points, paired bootstrap)\n")

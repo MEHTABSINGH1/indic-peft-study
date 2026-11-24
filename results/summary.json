@@ -1,0 +1,45 @@
+{
+  "best_encoder": "IndicBERT-v2",
+  "lora_minus_full_avg_points_indic": -0.512666214795388,
+  "lora_minus_full_by_lang": {
+    "pa": {
+      "delta": -1.11,
+      "p": 0.367
+    },
+    "hi": {
+      "delta": 0.85,
+      "p": 0.529
+    },
+    "kn": {
+      "delta": -0.95,
+      "p": 0.463
+    },
+    "ur": {
+      "delta": -0.83,
+      "p": 0.601
+    },
+    "en": {
+      "delta": -0.01,
+      "p": 0.981
+    }
+  },
+  "lora_trainable_pct": 0.10788719973011296,
+  "peak_mem_full_gb": 4.508172629333333,
+  "peak_mem_lora_gb": 2.2451660799999993,
+  "mem_reduction_x": 2.007946169101813,
+  "zero_shot_to_pa": {
+    "from_hi": 85.81777920530892,
+    "from_en": 85.76676087830003,
+    "from_ur": 86.74391927127813
+  },
+  "hi_to_pa_minus_en_to_pa_points": 0.051018327008890196,
+  "script_barrier_hi_to_ur_vs_hi_to_hi": -1.5192139226998336,
+  "best_lora_setting": {
+    "targets": "all-linear",
+    "rank": 1
+  },
+  "lora_minus_full_at_smallest_n": {
+    "n": 50,
+    "delta": -10.30816126853037
+  }
+}
